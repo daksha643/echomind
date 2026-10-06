@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>EchoMind</title>
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      background: #0f1117;
+      color: #eaeaea;
+      display: flex;
+      height: 100vh;
+    }
+    .side {
+      width: 380px;
+      padding: 24px;
+      background: #161923;
+      border-right: 1px solid #232838;
+      overflow-y: auto;
+    }
+    .main { flex: 1; position: relative; }
+    #graph { width: 100%; height: 100%; }
+    h1 { margin: 0 0 4px; font-size: 22px; }
+    .sub { color: #8a90a2; font-size: 12px; margin-bottom: 22px; }
+    .label {
+      font-size: 11px;
+      color: #6f768a;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+    button {
+      width: 100%;
+      padding: 12px;
+      background: #2b6cff;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+    button:hover { background: #1e5eec; }
+    button:disabled { background: #333; cursor: not-allowed; }
+    input[type=file] {
+      width: 100%;
+      font-size: 12px;
+      padding: 10px;
+      background: #0c0f16;
+      border: 1px solid #232838;
+      border-radius: 6px;
+      color: #eaeaea;
+    }
+    .suggest {
+      background: #1a2338;
+      border: 1px solid #2b3a5c;
+      border-radius: 8px;
+      padding: 14px;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 60px;
+    }
+    .status {
+      font-size: 12px;
+      color: #8a90a2;
+      margin-top: 10px;
+      min-height: 16px;
+    }
+    .mem {
+      padding: 10px;
+      background: #0c0f16;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      border-left: 3px solid #2b6cff;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .tag {
+      display: inline-block;
+      background: #232838;
+      color: #9aa3b8;
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      margin-right: 4px;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="side">
+    <h1>EchoMind</h1>
+    <div class="sub">Memory graph, live.</div>
+
+    <div class="label">Suggested question</div>
+    <div class="suggest" id="suggest">Loading...</div>
+
+    <div class="label" style="margin-top:22px;">Add a voice memory</div>
+    <input type="file" id="file" accept="audio/*" />
+    <button id="btn" onclick="send()">Upload &amp; Analyze</button>
+    <div class="status" id="status"></div>
+
+    <div class="label" style="margin-top:22px;">Recent memories</div>
+    <div id="list"></div>
+  </div>
+
+  <div class="main">
+    <div id="graph"></div>
+  </div>
+
+<script>
+  const API = "http://localhost:8000";
+  const USER = "demo";
+
+  const nodes = new vis.DataSet();
+  const edges = new vis.DataSet();
+  const container = document.getElementById("graph");
+  const network = new vis.Network(container, { nodes, edges }, {
+    nodes: {
+      shape: "dot",
+      size: 16,
+      font: { color: "#eaeaea", size: 14 },
+      borderWidth: 2,
+    },
+    edges: { color: { color: "#2b3a5c" }, smooth: true },
+    physics: {
+      stabilization: { iterations: 100 },
+      barnesHut: { springLength: 130 },
+    },
+    groups: {
+      user:   { color: { background: "#2b6cff", border: "#4a82ff" } },
+      memory: { color: { background: "#3a4658", border: "#5a6a82" } },
+      person: { color: { background: "#ff9f43", border: "#ffb96b" } },
+      place:  { color: { background: "#2ecc71", border: "#55dd8a" } },
+      time:   { color: { background: "#a55eea", border: "#bb7aec" } },
+      event:  { color: { background: "#ee5253", border: "#f37a7b" } },
+      group:  { color: { background: "#0abde3", border: "#48cee8" } },
+      other:  { color: { background: "#576574", border: "#7a8a9c" } },
+    },
+  });
+
+  function addMemoryToGraph(mem) {
+    const id = "m:" + Math.random().toString(36).slice(2, 9);
+    const label = mem.text.length > 34 ? mem.text.slice(0, 34) + "..." : mem.text;
+
+    nodes.add({ id, label, group: "memory", size: 18 });
+    edges.add({ from: "user:" + USER, to: id });
+
+    for (const e of mem.entities || []) {
+      const kind = (e.kind || "other").toLowerCase();
+      const eid = kind + ":" + e.name.toLowerCase();
+      if (!nodes.get(eid)) {
+        nodes.add({ id: eid, label: e.name, group: kind, size: 12 });
+      }
+      edges.add({ from: id, to: eid });
+    }
+  }
+
+  async function refresh() {
+    const mems = await fetch(`${API}/memories/${USER}`).then(r => r.json());
+    const sug = await fetch(`${API}/suggest/${USER}`).then(r => r.json());
+
+    document.getElementById("suggest").textContent = sug.suggestion;
+
+    nodes.clear(); edges.clear();
+    nodes.add({ id: "user:" + USER, label: "You", group: "user", size: 24 });
+
+    for (const mem of [...mems].reverse()) {
+      addMemoryToGraph(mem);
+    }
+
+    const list = document.getElementById("list");
+    list.innerHTML = "";
+    for (const mem of mems) {
+      const div = document.createElement("div");
+      div.className = "mem";
+      const tags = (mem.entities || [])
+        .map(e => `<span class="tag">${e.name}</span>`)
+        .join("");
+      div.innerHTML = `${mem.text}<div>${tags}</div>`;
+      list.appendChild(div);
+    }
+  }
+
+  async function send() {
+    const f = document.getElementById("file").files[0];
+    if (!f) return;
+
+    const btn = document.getElementById("btn");
+    const status = document.getElementById("status");
+    btn.disabled = true;
+    status.textContent = "Transcribing...";
+
+    const form = new FormData();
+    form.append("audio", f);
+    form.append("user_id", USER);
+
+    try {
+      await fetch(`${API}/voice`, { method: "POST", body: form });
+      status.textContent = "Done.";
+      document.getElementById("file").value = "";
+      refresh();
+    } catch (err) {
+      status.textContent = "Error: " + err;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  refresh();
+</script>
+</body>
+</html>
